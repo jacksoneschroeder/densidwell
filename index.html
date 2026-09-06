@@ -355,13 +355,22 @@ function portlandTaxlotMaximumDensity(t) {
     return { value: t.existingDensity, units: null, label: 'Unknown (zoning class not covered by this data)' };
 }
 
+// Single source of truth for these two labels - both appear as-is in the legend; NOT_YET_SPECIFIED additionally
+// gets the parenthetical reason appended (see notYetSpecifiedLabel) wherever it's shown in a per-shape info
+// popup, since the legend has no room for it but a popup does.
+var NOT_YET_SPECIFIED = 'Not yet specified';
+var NOT_ZONED_RESIDENTIAL = 'Not zoned for residential';
+function notYetSpecifiedLabel() {
+    return NOT_YET_SPECIFIED + ' (user has not input a value for this zoning classification)';
+}
+
 // Used for any city with no researched zoning-code density formulas yet (Salem, currently - see cities.json's
 // own hasMaxDensityFormulas flag). Deliberately NOT t.existingDensity: that's 0 for every Salem taxlot (no
 // existing-unit data exists for Salem at all - see genericUnknownMaximumDensity's caller in cities.json's
 // hasExistingUnits), and reusing it here would misleadingly read as "zero units allowed" rather than "not
 // yet computed".
 function genericUnknownMaximumDensity(t) {
-    return { value: null, units: null, label: 'Unknown (' + CITY_CONFIGS[activeCityId].label + '\'s zoning-code density formulas have not been researched yet)' };
+    return { value: null, units: null, label: notYetSpecifiedLabel() };
 }
 
 // Stand-in for a real researched formula (see genericUnknownMaximumDensity above): rather than this tool
@@ -369,8 +378,8 @@ function genericUnknownMaximumDensity(t) {
 // map - someone who already knows Salem's code, e.g. a city planner or commissioner - type in their own
 // units/acre estimate per zone (see buildZoneDensityOverrideTable below). Stored in localStorage only (never
 // sent anywhere), keyed per city so a future third city gets its own independent set. A zone with no override
-// entered yet still falls back to the honest "Unknown" - entering a number is what promotes a zone out of that
-// state, not just this engine being wired up.
+// entered yet still falls back to the honest NOT_YET_SPECIFIED - entering a number is what promotes a zone out
+// of that state, not just this engine being wired up.
 var ZONE_DENSITY_OVERRIDES = {}; // { cityId: { zoneCode: duPerAcre } }
 function loadZoneDensityOverrides(cityId) {
     try {
@@ -401,7 +410,7 @@ var IS_RESIDENTIAL_TAXLOT = {
     salem: function(t) { return isResidentialSalemZone(t.zone); },
 };
 function taxlotMaximumDensity(t) {
-    if (!IS_RESIDENTIAL_TAXLOT[activeCityId](t)) return { value: null, units: null, label: 'N/A (not zoned for residential development)', notResidential: true };
+    if (!IS_RESIDENTIAL_TAXLOT[activeCityId](t)) return { value: null, units: null, label: NOT_ZONED_RESIDENTIAL, notResidential: true };
     return MAX_DENSITY_ENGINES[activeCityId](t);
 }
 
@@ -440,10 +449,10 @@ function legendEntries() {
     // outright for a city with no existing-unit data anyway (see applyCityChrome). Taxlot mode can show a
     // non-residential taxlot for ANY city now (see IS_RESIDENTIAL_TAXLOT); aggregate shapes are always
     // pre-filtered to residential-only ones (build_aggregation_layers.py), so they can only ever be genuinely
-    // "Unknown" (no researched formula/override), never "not zoned for residential".
+    // NOT_YET_SPECIFIED (no researched formula/override), never NOT_ZONED_RESIDENTIAL.
     if (colorBy === 'maximum') {
-        if (viewMode === 'taxlot') entries = entries.concat([[NOT_RESIDENTIAL_COLOR, 'Not zoned for residential']]);
-        if (!CITY_CONFIGS[activeCityId].hasMaxDensityFormulas) entries = entries.concat([[UNKNOWN_COLOR, 'Unknown']]);
+        if (viewMode === 'taxlot') entries = entries.concat([[NOT_RESIDENTIAL_COLOR, NOT_ZONED_RESIDENTIAL]]);
+        if (!CITY_CONFIGS[activeCityId].hasMaxDensityFormulas) entries = entries.concat([[UNKNOWN_COLOR, NOT_YET_SPECIFIED]]);
     }
     return entries;
 }
@@ -575,7 +584,7 @@ function infoForShape(mode, t) {
             ['Zoning classification', t.zone || 'N/A (zoning class not covered by this data)'],
             ['Area', t.acres.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' acres'],
             ['Zoned maximum density', max.label],
-            ['Zoned maximum units', max.units != null ? max.units.toLocaleString() : (IS_RESIDENTIAL_TAXLOT[activeCityId](t) ? 'Unknown' : 'N/A (not zoned for residential development)')],
+            ['Zoned maximum units', max.units != null ? max.units.toLocaleString() : (IS_RESIDENTIAL_TAXLOT[activeCityId](t) ? NOT_YET_SPECIFIED : NOT_ZONED_RESIDENTIAL)],
             ['Existing units', cfg.hasExistingUnits ? t.existingUnits.toLocaleString() : notAvailable],
             ['Existing density', cfg.hasExistingUnits ? (t.existingDensity.toFixed(1) + ' du/ac' + (nonconforming ? ' (legally non-conforming)' : '')) : notAvailable],
         ] };
@@ -589,8 +598,8 @@ function infoForShape(mode, t) {
         [ID_LABELS[mode], mode === 'zoning' ? t.polygonId : t.name],
         ['Zoning classification', mode === 'zoning' ? t.zone : 'N/A (mixed zoning)'],
         ['Area', t.acres.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' acres'],
-        ['Zoned maximum density (mean)', t.maximumDensity == null ? 'Unknown' : t.maximumDensity.toFixed(1) + ' du/ac'],
-        ['Zoned maximum units (total)', t.maximumUnits == null ? 'Unknown' : t.maximumUnits.toLocaleString()],
+        ['Zoned maximum density (mean)', t.maximumDensity == null ? NOT_YET_SPECIFIED : t.maximumDensity.toFixed(1) + ' du/ac'],
+        ['Zoned maximum units (total)', t.maximumUnits == null ? NOT_YET_SPECIFIED : t.maximumUnits.toLocaleString()],
     ];
     if (t._maxDensityTotalCount > 0 && t._maxDensityKnownCount < t._maxDensityTotalCount) {
         rows.push(['Zoned max density coverage', t._maxDensityKnownCount + ' of ' + t._maxDensityTotalCount + ' residential taxlots have a zone estimate entered']);
