@@ -114,8 +114,6 @@
         <button type="button" id="download-btn">Download map image (uses current view)</button>
         <hr>
 
-        <p id="sidebar-note"></p>
-
         <div id="sidebar-footer"><a href="https://github.com/jacksoneschroeder/portland-housing-density-mapper" target="_blank" rel="noopener">View source code on GitHub</a></div>
     </div>
 
@@ -403,13 +401,20 @@ var IS_RESIDENTIAL_TAXLOT = {
     salem: function(t) { return isResidentialSalemZone(t.zone); },
 };
 function taxlotMaximumDensity(t) {
-    if (!IS_RESIDENTIAL_TAXLOT[activeCityId](t)) return { value: null, units: null, label: 'N/A (not zoned for residential development)' };
+    if (!IS_RESIDENTIAL_TAXLOT[activeCityId](t)) return { value: null, units: null, label: 'N/A (not zoned for residential development)', notResidential: true };
     return MAX_DENSITY_ENGINES[activeCityId](t);
 }
 
 // Legend: 1 threshold -> 2 color bins, 2 thresholds -> 3 bins.
 var COLORS = ['#c6dbef', '#6baed6', '#08519c'];
-var NO_DATA_COLOR = '#ccc'; // A city with no researched max-density formulas yet (see genericUnknownMaximumDensity) colors every shape this flat gray instead of a misleadingly-precise bucket.
+// Two distinct grays for two distinct reasons a shape has no density figure at all, so a glance at the legend
+// doesn't conflate "this parcel simply isn't housing" with "we genuinely don't know yet": NOT_RESIDENTIAL_COLOR
+// (lighter) for a taxlot that isn't zoned for residential use in the first place (see IS_RESIDENTIAL_TAXLOT) -
+// there's nothing to know, a density figure would never apply here. UNKNOWN_COLOR (darker) for a residential
+// zone/shape with no researched formula or override entered yet (genericUnknownMaximumDensity) - there IS a
+// real answer, this tool just doesn't have it.
+var NOT_RESIDENTIAL_COLOR = '#ccc';
+var UNKNOWN_COLOR = '#999';
 function getThresholds() {
     var t1 = parseFloat(document.getElementById('threshold-1').value);
     var t2 = parseFloat(document.getElementById('threshold-2').value);
@@ -417,8 +422,9 @@ function getThresholds() {
     if (isNaN(t2) || t2 <= (t1 === null ? -Infinity : t1)) t2 = null;
     return { t1: t1, t2: t2 };
 }
-function colorForDensity(d, th) {
-    if (d == null) return NO_DATA_COLOR;
+function colorForDensity(d, th, notResidential) {
+    if (notResidential) return NOT_RESIDENTIAL_COLOR;
+    if (d == null) return UNKNOWN_COLOR;
     if (th.t1 === null) return COLORS[1];
     if (th.t2 === null) return d >= th.t1 ? COLORS[2] : COLORS[0];
     return d >= th.t2 ? COLORS[2] : d >= th.t1 ? COLORS[1] : COLORS[0];
@@ -431,12 +437,14 @@ function legendEntries() {
     else if (th.t2 === null) entries = [[COLORS[0], '0.0–' + (th.t1 - 0.1).toFixed(1)], [COLORS[2], th.t1.toFixed(1) + '+']];
     else entries = [[COLORS[0], '0.0–' + (th.t1 - 0.1).toFixed(1)], [COLORS[1], th.t1.toFixed(1) + '–' + (th.t2 - 0.1).toFixed(1)], [COLORS[2], th.t2.toFixed(1) + '+']];
     // Only the "maximum" color-by mode can ever hit a null density - "existing" never does, and is disabled
-    // outright for a city with no existing-unit data anyway (see applyCityChrome). Taxlot mode can hit one for
-    // ANY city, since every non-residential taxlot is now included on the map (see IS_RESIDENTIAL_TAXLOT) but
-    // never gets a density figure; aggregate modes only hit one for a city with no researched formulas yet
-    // (genericUnknownMaximumDensity). "N/A" deliberately covers both reasons at this zoomed-out legend level -
-    // the popup for any individual shape always spells out which one actually applies.
-    if (colorBy === 'maximum' && (viewMode === 'taxlot' || !CITY_CONFIGS[activeCityId].hasMaxDensityFormulas)) entries = entries.concat([[NO_DATA_COLOR, 'N/A']]);
+    // outright for a city with no existing-unit data anyway (see applyCityChrome). Taxlot mode can show a
+    // non-residential taxlot for ANY city now (see IS_RESIDENTIAL_TAXLOT); aggregate shapes are always
+    // pre-filtered to residential-only ones (build_aggregation_layers.py), so they can only ever be genuinely
+    // "Unknown" (no researched formula/override), never "not zoned for residential".
+    if (colorBy === 'maximum') {
+        if (viewMode === 'taxlot') entries = entries.concat([[NOT_RESIDENTIAL_COLOR, 'Not zoned for residential']]);
+        if (!CITY_CONFIGS[activeCityId].hasMaxDensityFormulas) entries = entries.concat([[UNKNOWN_COLOR, 'Unknown']]);
+    }
     return entries;
 }
 var colorBy = 'existing'; // set before the first rebuildLegend() call below reads it
@@ -451,12 +459,14 @@ rebuildLegend();
 updateScaleBar();
 
 var viewMode = 'taxlot';
-document.querySelectorAll('input[name=view-mode]').forEach(function(r) { r.onchange = function() { viewMode = this.value; closeInfoBar(); redrawShapes(); }; });
+document.querySelectorAll('input[name=view-mode]').forEach(function(r) { r.onchange = function() { viewMode = this.value; closeInfoBar(); rebuildLegend(); redrawShapes(); }; });
 document.querySelectorAll('input[name=color-by]').forEach(function(r) { r.onchange = function() { colorBy = this.value; rebuildLegend(); redrawShapes(); }; });
 document.getElementById('show-outlines-toggle').onchange = redrawShapes;
 
 function densityForColor(mode, t) {
-    return colorBy === 'existing' ? t.existingDensity : mode === 'taxlot' ? taxlotMaximumDensity(t).value : t.maximumDensity;
+    if (colorBy === 'existing') return { value: t.existingDensity, notResidential: false };
+    if (mode === 'taxlot') { var max = taxlotMaximumDensity(t); return { value: max.value, notResidential: !!max.notResidential }; }
+    return { value: t.maximumDensity, notResidential: false };
 }
 
 // Info popup: shows details for whichever shape is nearest a click, not the shape you literally hit. A single map-level click handler (findNearestShape, below with redrawShapes) picks the closest shape in the current view mode's dataset - point-in-polygon for a real hit, nearest-perimeter-distance as a fallback for a near-miss (a street, a gap between parcels) - rather than requiring per-shape Leaflet click handlers, which is what forced every rendered shape to carry its own interactive hit target before. That per-shape approach is also what caused the earlier "hit or miss" clicking and cursor-detection problems this replaces: with nothing left listening for click/hover on the shapes themselves, nothing can intercept a click meant for the map underneath ever again. (Ported from this project's own TOD-PITCH sibling, which solved the same problem the same way for its own taxlot popup.)
@@ -673,7 +683,7 @@ function buildDensityInfoModal() {
     document.getElementById('max-density-generic-text').classList.toggle('hidden', cfg.hasMaxDensityFormulas || overridable);
     document.getElementById('max-density-salem-content').classList.toggle('hidden', !overridable);
     if (overridable) {
-        document.getElementById('max-density-salem-intro').innerHTML = cfg.label + '\'s own zoning-code density formulas have not been researched in this tool yet. If you know ' + cfg.label + '\'s zoning code, enter your own maximum units/acre estimate per zone below - closing this window applies it to the map and taxlot popups. Zones left blank stay "Unknown". Saved in this browser only; nothing is sent anywhere.';
+        document.getElementById('max-density-salem-intro').innerHTML = 'To visualize ' + cfg.label + '\'s zoned maximum densities, enter the maximum density for each zoning classification below.';
         buildZoneDensityOverrideTable(cfg);
         return;
     }
@@ -739,9 +749,10 @@ function redrawShapes() {
     var mode = viewMode, th = getThresholds(), bounds = map.getBounds(), showOutlines = document.getElementById('show-outlines-toggle').checked;
     datasets[mode].forEach(function(t) {
         if (!bounds.contains([t.lat, t.lng])) return;
+        var d = densityForColor(mode, t);
         L.polygon(esriRingsToLatLngRings(t.rings), {
             renderer: shapesRenderer, color: '#333', weight: showOutlines ? 1 : 0,
-            fillColor: colorForDensity(densityForColor(mode, t), th), fillOpacity: 0.85,
+            fillColor: colorForDensity(d.value, th, d.notResidential), fillOpacity: 0.85,
         }).addTo(shapesLayer);
     });
 }
@@ -940,7 +951,6 @@ var TAXLOT_NORMALIZERS = {
 // otherwise). The app's own name (the <title>/sidebar <h1>) is static now - it no longer varies per city.
 function applyCityChrome(cfg) {
     document.getElementById('zoning-mode-label').textContent = cfg.zoningPolygonLabel;
-    document.getElementById('sidebar-note').textContent = cfg.sidebarNote;
 
     CITATIONS = cfg.citations;
     LEGEND_SOURCES = cfg.legendSources.map(function(s) { return [s[0], CITATIONS[s[1]]]; });
