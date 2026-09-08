@@ -579,14 +579,18 @@ function infoForShape(mode, t) {
     if (mode === 'taxlot') {
         var max = taxlotMaximumDensity(t);
         var nonconforming = max.units != null && cfg.hasExistingUnits && t.existingUnits > max.units;
+        // "N/A" for a taxlot that isn't zoned for residential use at all - the question doesn't apply there,
+        // which is a different situation from "Not available" (a residential taxlot this city's data source
+        // just doesn't track existing-unit counts for at all - see cfg.hasExistingUnits).
+        var existingNA = !!max.notResidential;
         return { title: TITLES.taxlot, rows: [
             ['Address', t.address || 'No address on file'],
             ['Zoning classification', t.zone || 'N/A (zoning class not covered by this data)'],
             ['Area', t.acres.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' acres'],
             ['Zoned maximum density', max.label],
-            ['Zoned maximum units', max.units != null ? max.units.toLocaleString() : (IS_RESIDENTIAL_TAXLOT[activeCityId](t) ? NOT_YET_SPECIFIED : NOT_ZONED_RESIDENTIAL)],
-            ['Existing units', cfg.hasExistingUnits ? t.existingUnits.toLocaleString() : notAvailable],
-            ['Existing density', cfg.hasExistingUnits ? (t.existingDensity.toFixed(1) + ' du/ac' + (nonconforming ? ' (legally non-conforming)' : '')) : notAvailable],
+            ['Zoned maximum units', max.units != null ? max.units.toLocaleString() : (existingNA ? NOT_ZONED_RESIDENTIAL : NOT_YET_SPECIFIED)],
+            ['Existing units', cfg.hasExistingUnits ? t.existingUnits.toLocaleString() : (existingNA ? 'N/A' : notAvailable)],
+            ['Existing density', cfg.hasExistingUnits ? (t.existingDensity.toFixed(1) + ' du/ac' + (nonconforming ? ' (legally non-conforming)' : '')) : (existingNA ? 'N/A' : notAvailable)],
         ] };
     }
     // Aggregate modes: unit totals and densities are real area-weighted sums/means. For most cities these come
